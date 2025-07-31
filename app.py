@@ -258,7 +258,9 @@ def main() -> None:
         for idx, activity in enumerate(df['Activity']):
             checkbox_col = col_a if idx % 2 == 0 else col_b
             checked = completed.get(activity, False)
-            new_val = checkbox_col.checkbox(activity, value=checked)
+            # Provide a unique key for each checkbox to avoid duplicate ID errors
+            key = f"chk_{idx}_{activity}"
+            new_val = checkbox_col.checkbox(activity, value=checked, key=key)
             completed[activity] = new_val
         st.session_state['completed'] = completed
 
