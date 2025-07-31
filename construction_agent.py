@@ -16,13 +16,15 @@ The script can be invoked from the command line:
 
     python construction_agent.py --file "B13 Remodeling Schedule.xlsx" \
         --start-date "2025-08-01" --hours-per-day 8 \
-        --base-rate 80 --labour-burden 0.2 --inefficiency 0.2 \
+        --base-rate 112 --labour-burden 0.2 --inefficiency 0.2 \
         --contingency 0.07
 
-The above example assumes Day 1 corresponds to 1 August 2025, uses an 8‑hour
-work day, a crew base rate of $80 per hour, a 20 % labour‑burden rate, a
-20 % inefficiency factor and a 7 % contingency for renovations.  These
-parameters can be adjusted to suit local conditions.
+    The above example assumes Day 1 corresponds to 1 August 2025, uses an 8‑hour
+    work day and a crew base rate of around ₹112 per hour (which is the
+    approximate hourly wage in Kerala’s construction sector in early 2025【353133779557527†L274-L277】).  A
+    20 % labour‑burden rate, a 20 % inefficiency factor and a 7 % contingency
+    for renovations are applied.  These parameters can be adjusted to suit
+    local conditions.
 
 Limitations: The dependency graph is currently a simple sequential chain.
 Real projects may have complex parallel activities.  You should supply
@@ -37,6 +39,10 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import openpyxl
+
+# For optional Gantt chart generation
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 
 
 @dataclass
@@ -316,6 +322,58 @@ def compute_contingency(base_cost: float, contingency_rate: float = 0.07) -> flo
     return base_cost * contingency_rate
 
 
+def plot_gantt(
+    activities: List[Activity],
+    completed: Optional[Dict[str, bool]] = None,
+    title: str = "Gantt Chart",
+):
+    """
+    Generate a simple Gantt chart using matplotlib.
+
+    Parameters
+    ----------
+    activities : List[Activity]
+        List of activities with start_date and end_date set.  Activities
+        without dates are ignored.
+    completed : Optional[Dict[str, bool]], optional
+        Mapping from activity name to a boolean indicating whether the
+        activity has been completed.  Completed activities are coloured
+        differently.
+    title : str
+        Chart title.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        The created figure object.  The caller is responsible for displaying
+        or saving the figure (e.g., via Streamlit's st.pyplot).
+    """
+    # Filter out activities without valid dates
+    acts_with_dates = [a for a in activities if a.start_date and a.end_date]
+    if not acts_with_dates:
+        raise ValueError("No activities with valid dates to plot.")
+    # Sort by start_date for display order
+    acts_with_dates.sort(key=lambda a: (a.start_date, a.name))
+    fig, ax = plt.subplots(figsize=(10, max(4, len(acts_with_dates) * 0.3)))
+    for idx, act in enumerate(acts_with_dates):
+        start_num = mdates.date2num(act.start_date)
+        finish_num = mdates.date2num(act.end_date)
+        width = finish_num - start_num + 1  # inclusive of both dates
+        color = "#76C893" if completed and completed.get(act.name) else "#5FA8D3"
+        ax.barh(idx, width, left=start_num, height=0.6, color=color, edgecolor="black")
+        ax.text(start_num + width / 2, idx, act.name, va="center", ha="center", fontsize=8, color="black")
+    # Configure axes
+    ax.set_yticks([])
+    ax.xaxis_date()
+    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
+    fig.autofmt_xdate()
+    ax.set_title(title)
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Activities")
+    return fig
+
+
 def print_summary(
     activities: List[Activity],
     total_hours: float,
@@ -335,8 +393,13 @@ def print_summary(
     print("\n=== Activity Schedule and Cost Summary ===\n")
     sorted_acts = sorted(activities, key=lambda a: (a.es or 0, a.name))
     header = [
-        "Activity", "Start", "Finish", "Duration (d)",
-        "Labour hours", "Cost ($)", "Critical?"
+        "Activity",
+        "Start",
+        "Finish",
+        "Duration (d)",
+        "Labour hours",
+        "Cost (₹)",
+        "Critical?",
     ]
     print("{:<25} {:<12} {:<12} {:<12} {:<14} {:<12} {}".format(*header))
     print("-" * 100)
@@ -352,9 +415,9 @@ def print_summary(
     total_with_contingency = total_cost + contingency_amount
     print("\nTotals:")
     print(f"  Total labour hours: {total_hours:.1f} h")
-    print(f"  Total labour cost: ${total_cost:,.2f}")
-    print(f"  Contingency ({contingency_rate*100:.0f}%): ${contingency_amount:,.2f}")
-    print(f"  Total including contingency: ${total_with_contingency:,.2f}\n")
+    print(f"  Total labour cost: ₹{total_cost:,.2f}")
+    print(f"  Contingency ({contingency_rate*100:.0f}%): ₹{contingency_amount:,.2f}")
+    print(f"  Total including contingency: ₹{total_with_contingency:,.2f}\n")
 
 
 def main() -> None:
@@ -362,7 +425,16 @@ def main() -> None:
     parser.add_argument("--file", required=True, help="Path to the Excel schedule (colour‑coded)")
     parser.add_argument("--start-date", required=True, help="Calendar date for Day 1 (YYYY-MM-DD)")
     parser.add_argument("--hours-per-day", type=float, default=8.0, help="Number of working hours per day (<=9)")
-    parser.add_argument("--base-rate", type=float, default=80.0, help="Base hourly labour rate ($)")
+    parser.add_argument(
+        "--base-rate",
+        type=float,
+        default=112.0,
+        help=(
+            "Base hourly labour rate (in INR). Defaults to ₹112/h, based on the "
+            "average daily wage of ₹893.6 for construction workers in Kerala in "
+            "2024【353133779557527†L274-L277】, divided by an 8‑hour day"
+        ),
+    )
     parser.add_argument("--labour-burden", type=float, default=0.2, help="Labour burden fraction (e.g., 0.2 for 20%)")
     parser.add_argument("--inefficiency", type=float, default=0.2, help="Inefficiency factor fraction")
     parser.add_argument("--contingency", type=float, default=0.07, help="Contingency fraction (e.g., 0.07 for 7%)")
