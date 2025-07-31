@@ -42,6 +42,7 @@ from construction_agent import (
     infer_dependencies,
     parse_schedule,
     compute_contingency,
+    plot_gantt,
 )
 
 
@@ -98,13 +99,18 @@ def process_schedule(
     )
     contingency_amount = compute_contingency(total_cost, contingency)
     total_with_contingency = total_cost + contingency_amount
-    # Build data frame for display
+    # Build data frame for display including CPM fields
     df = pd.DataFrame(
         {
             "Activity": [a.name for a in activities],
             "Start": [a.start_date for a in activities],
             "Finish": [a.end_date for a in activities],
             "Duration (days)": [a.duration for a in activities],
+            "ES": [a.es for a in activities],
+            "EF": [a.ef for a in activities],
+            "LS": [a.ls for a in activities],
+            "LF": [a.lf for a in activities],
+            "Slack": [a.slack for a in activities],
             "Labour hours": [a.labour_hours for a in activities],
             "Cost (INR)": [a.labour_cost for a in activities],
             "Critical": ["YES" if a.slack == 0 else "no" for a in activities],
@@ -198,17 +204,89 @@ def main() -> None:
                     inefficiency,
                     contingency,
                 )
-                st.subheader("Activity Schedule and Cost Summary")
-                st.dataframe(df)
-                st.markdown(
-                    f"**Total labour hours:** {total_hours:.1f} h\n\n"
-                    f"**Total labour cost:** ₹{total_cost:,.2f}\n\n"
-                    f"**Total including contingency:** ₹{total_with_contingency:,.2f}"
-                )
+                # Store the dataframe and activities in session state for later interactions
+                st.session_state['df'] = df
+                st.session_state['total_hours'] = total_hours
+                st.session_state['total_cost'] = total_cost
+                st.session_state['total_with_contingency'] = total_with_contingency
+                # Initialize completed status dict if not present
+                if 'completed' not in st.session_state:
+                    st.session_state['completed'] = {act: False for act in df['Activity']}
             except Exception as e:
                 st.error(f"An error occurred while processing the schedule: {e}")
+
+    # If we have processed a schedule, provide interactive features
+    if 'df' in st.session_state:
+        df = st.session_state['df']
+        total_hours = st.session_state['total_hours']
+        total_cost = st.session_state['total_cost']
+        total_with_contingency = st.session_state['total_with_contingency']
+        completed = st.session_state['completed']
+
+        st.subheader("Activity Schedule and Cost Summary")
+        # Display explanation of tuning parameters in an expander
+        with st.expander("What do labour burden, inefficiency and contingency mean?"):
+            st.markdown(
+                """
+                **Labour burden** represents the employer’s additional costs beyond
+                wages, including payroll taxes, insurance and statutory fees (often
+                around 20 % of wages)【143656559969249†L250-L284】.  
+                **Inefficiency factor** accounts for unproductive time—studies show
+                workers may lose around 42 minutes per day【143656559969249†L286-L312】, so
+                adding about 20 % helps capture this hidden cost.  
+                **Contingency** is a reserve set aside to cover unforeseen
+                conditions or changes.  Renovation projects typically include
+                about 7–8 % of construction cost as contingency【537146304403148†L190-L209】.
+                You can adjust these values based on experience and risk tolerance.
+                """
+            )
+        # Date selector for marking tasks complete
+        st.markdown("### Progress Tracking")
+        sel_date = st.date_input("Select date to mark all scheduled tasks as complete", value=start_date)
+        if st.button("Mark tasks on selected date as complete"):
+            # Mark tasks whose schedule spans selected date as completed
+            for i, row in df.iterrows():
+                if row['Start'] <= sel_date <= row['Finish']:
+                    completed[row['Activity']] = True
+        if st.button("Reset completion status"):
+            for key in completed.keys():
+                completed[key] = False
+        # Display checkboxes for individual task completion
+        st.markdown("### Mark individual tasks as complete")
+        # Create two columns for readability
+        col_a, col_b = st.columns(2)
+        for idx, activity in enumerate(df['Activity']):
+            checkbox_col = col_a if idx % 2 == 0 else col_b
+            checked = completed.get(activity, False)
+            new_val = checkbox_col.checkbox(activity, value=checked)
+            completed[activity] = new_val
+        st.session_state['completed'] = completed
+
+        # Update DataFrame to include completion status
+        df_display = df.copy()
+        df_display['Completed'] = df_display['Activity'].map(completed)
+
+        st.markdown("### Activities Table (with CPM analysis)")
+        st.dataframe(df_display)
+        st.markdown(
+            f"**Total labour hours:** {total_hours:.1f} h\n\n"
+            f"**Total labour cost:** ₹{total_cost:,.2f}\n\n"
+            f"**Total including contingency:** ₹{total_with_contingency:,.2f}"
+        )
+        # Plot and display the Gantt chart using Activity objects with correct dates
+        try:
+            acts_for_plot = []
+            for _, row in df_display.iterrows():
+                a = Activity(name=row['Activity'], start_day=1, end_day=1)
+                a.start_date = row['Start']
+                a.end_date = row['Finish']
+                acts_for_plot.append(a)
+            fig = plot_gantt(acts_for_plot, completed=completed, title="Project Gantt Chart")
+            st.pyplot(fig)
+        except Exception as e:
+            st.error(f"Error plotting Gantt chart: {e}")
     else:
-        st.info("Please upload an Excel schedule to begin.")
+        st.info("Please upload an Excel schedule and click Generate Report.")
 
 
 if __name__ == "__main__":
